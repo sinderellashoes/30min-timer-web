@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <!-- `flutter build web --base-href` の値に置き換わる（tool/build_web.ps1） -->
+  <base href="/30min-timer-web/">
+
+  <meta charset="UTF-8">
+  <meta name="description" content="30分固定のタイマー">
+
+  <!-- iPhone のホーム画面に追加したとき（SPEC 開発の進め方 7） -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="30分タイマー">
+  <meta name="theme-color" content="#FFFFFF">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="favicon.png">
+
+  <title>30分タイマー</title>
+  <link rel="manifest" href="manifest.json">
+  <style>html, body { background: #FFFFFF; margin: 0; }</style>
+</head>
+<body>
+  <script>
+    // Flutter（lib/platform/web/web_main.dart）から呼ぶ、通知音・画面を消さない・アニメーションを減らす。
+    // どれもインターネットには通信しない（通知音はアプリと一緒に端末にしまったファイル）。
+    window.thirtyTimer = (() => {
+      // 消音スイッチがオンなら鳴らさない再生方法（SPEC 通知 4）
+      try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) {}
+
+      const wav = fetch('assets/assets/sounds/finish.wav')
+        .then((r) => r.arrayBuffer())
+        .catch(() => null);
+      let ctx = null;
+      let decoding = null;
+      let buffer = null;
+
+      // iPhone は、画面に触れたときでないと音を鳴らす準備ができない
+      function unlock() {
+        try {
+          if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+          if (ctx.state !== 'running') ctx.resume().catch(() => {});
+          if (!decoding) {
+            decoding = wav
+              .then((data) => (data ? ctx.decodeAudioData(data) : null))
+              .then((b) => { buffer = b; })
+              .catch(() => {});
+          }
+        } catch (e) {}
+      }
+      for (const type of ['touchend', 'click', 'keydown']) {
+        document.addEventListener(type, unlock, { capture: true, passive: true });
+      }
+
+      function playFinish(level) {
+        if (!ctx || !buffer) return;
+        if (ctx.state !== 'running') ctx.resume().catch(() => {});
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.value = level;
+        source.connect(gain).connect(ctx.destination);
+        source.start();
+      }
+
+      // 実行中だけ画面が自動で消えないようにする（SPEC 開発の進め方 7 の 2）。
+      // ほかのアプリに切り替えると iPhone が解除するので、戻ったときにかけ直す。
+      let wantAwake = false;
+      let lock = null;
+      let requesting = false;
+      async function applyWakeLock() {
+        if (!('wakeLock' in navigator)) return;
+        try {
+          if (wantAwake && !lock && !requesting && document.visibilityState === 'visible') {
+            requesting = true;
+            const l = await navigator.wakeLock.request('screen');
+            requesting = false;
+            l.addEventListener('release', () => { if (lock === l) lock = null; });
+            lock = l;
+            if (!wantAwake) applyWakeLock();
+          } else if (!wantAwake && lock) {
+            const l = lock;
+            lock = null;
+            await l.release();
+          }
+        } catch (e) {
+          requesting = false;
+          lock = null;
+        }
+      }
+      document.addEventListener('visibilitychange', applyWakeLock);
+
+      const motion = matchMedia('(prefers-reduced-motion: reduce)');
+
+      return {
+        playFinish,
+        keepAwake(on) { wantAwake = on; applyWakeLock(); },
+        reduceMotion: () => motion.matches,
+        watchReduceMotion(callback) {
+          motion.addEventListener('change', (e) => callback(e.matches));
+        },
+      };
+    })();
+
+    // 一度開いたら、機内モードでも開けるようにする（web/sw.js）
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
