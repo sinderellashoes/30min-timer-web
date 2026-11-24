@@ -104,7 +104,17 @@
 
     // 一度開いたら、機内モードでも開けるようにする（web/sw.js）
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      // すでに前の版が入っていたときだけ、新しい版に入れ替わったら開き直す（初めて開いたときは開き直さない）
+      const hadVersion = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (hadVersion) location.reload();
+      });
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+        // iPhone はホーム画面のアプリに戻っても読み込み直さないので、戻るたびに新しい版を確かめる
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      }).catch(() => {});
     }
   </script>
   <script src="flutter_bootstrap.js" async></script>
